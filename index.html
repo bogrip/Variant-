@@ -21,11 +21,16 @@
         ul { list-style: none; padding: 0; }
         li { background: #2a2a2a; padding: 10px; margin-bottom: 8px; border-radius: 8px; font-size: 14px; }
         .option-btn { background: #2b2b2b; color: #fff; border: 1px solid #444; padding: 12px; margin-bottom: 8px; border-radius: 8px; text-align: left; width: 100%; font-size: 15px; cursor: pointer; }
-        .option-btn:hover { border-color: #f0b90b; }
+        .option-btn:hover:not(:disabled) { border-color: #f0b90b; }
         .status-box { background: #252525; padding: 10px; border-radius: 8px; text-align: center; font-size: 14px; color: #ccc; margin-bottom: 12px; }
         .badge-correct { background: #00ff7f; color: #000; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
         .res-item { background: #2a2a2a; padding: 10px; margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #555; }
         .res-correct { border-left-color: #00ff7f; }
+        
+        /* Таблиця лідерів */
+        .leaderboard { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+        .leaderboard th, .leaderboard td { padding: 8px; text-align: left; border-bottom: 1px solid #333; }
+        .leaderboard th { color: #f0b90b; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -87,6 +92,10 @@
     <div id="screen-results" class="screen">
         <h2>Підсумки раунду</h2>
         <div id="results-container"></div>
+        
+        <h3 style="margin-top: 25px;">🏆 Турнірна таблиця</h3>
+        <div id="leaderboard-container"></div>
+
         <button id="next-round-btn" onclick="resetForNextRound()" style="display: none;">Наступний раунд</button>
     </div>
 </div>
@@ -98,7 +107,7 @@
     let isHost = false;
     let myName = "";
     let myId = "";
-    let players = []; 
+    let players = []; // { id, name, score }
 
     let answersSubmitted = {}; 
     let votesSubmitted = {};   
@@ -120,7 +129,7 @@
         peer = new Peer(myId);
         peer.on('open', () => {
             document.getElementById('room-id-display').innerText = code;
-            players.push({ id: myId, name: myName + " (Ведучий)" });
+            players.push({ id: myId, name: myName + " (Ведучий)", score: 0 });
             updateLobbyUI();
             showScreen('screen-lobby');
             document.getElementById('start-btn').style.display = 'block';
@@ -157,11 +166,10 @@
         });
     }
 
-    // ЛОГІКА ВЕДУЧОГО (Host)
     function handleHostMessages(conn, data) {
         if (data.type === 'JOIN') {
             connMap[conn.peer] = conn;
-            players.push({ id: conn.peer, name: data.name });
+            players.push({ id: conn.peer, name: data.name, score: 0 });
             updateLobbyUI();
             broadcastState({ type: 'LOBBY_UPDATE', players });
         }
@@ -180,7 +188,6 @@
         const list = document.getElementById('player-list');
         list.innerHTML = players.map(p => `<li>${p.name}</li>`).join('');
         if (isHost) {
-            // Для старту потрібно мінімум 3 особи (1 ведучий + 2 гравці)
             document.getElementById('start-btn').disabled = players.length < 3; 
         }
     }
@@ -189,7 +196,6 @@
         Object.values(connMap).forEach(c => c.send(msg));
     }
 
-    // ЛОГІКА ГРАВЦІВ (Client)
     function handlePlayerMessages(data) {
         if (data.type === 'LOBBY_UPDATE') {
             players = data.players;
@@ -203,11 +209,10 @@
             showVoteScreen();
         }
         else if (data.type === 'SHOW_RESULTS') {
-            showResultsScreen(data.results);
+            showResultsScreen(data.results, data.players);
         }
     }
 
-    // ЕТАП 1: Ввід відповідей
     function startQuestionPhase() {
         broadcastState({ type: 'START_INPUT' });
         showInputScreen();
@@ -218,6 +223,11 @@
         answersSubmitted = {};
         document.getElementById('submit-answers-btn').style.display = 'block';
         document.getElementById('input-wait-msg').style.display = 'none';
+
+        // Очищення полів вводу
+        document.getElementById('host-fake').value = "";
+        document.getElementById('host-real').value = "";
+        document.getElementById('player-fake').value = "";
 
         if (isHost) {
             document.getElementById('role-indicator').innerText = "Ви — ВЕДУЧИЙ. Введіть 2 варіанти.";
@@ -264,7 +274,6 @@
                 }
             });
 
-            // Перемішуємо всі варіанти
             currentOptions.sort(() => Math.random() - 0.5);
 
             broadcastState({ type: 'START_VOTE', options: currentOptions });
@@ -272,7 +281,6 @@
         }
     }
 
-    // ЕТАП 2: Голосування
     function showVoteScreen() {
         showScreen('screen-vote');
         votesSubmitted = {};
@@ -288,7 +296,17 @@
                 const btn = document.createElement('button');
                 btn.className = 'option-btn';
                 btn.innerText = opt.text;
-                btn.onclick = () => submitVote(idx);
+
+                // Заборона голосування за свій варіант
+                if (opt.authorId === myId) {
+                    btn.disabled = true;
+                    btn.innerText += " 🚫 (Ваш варіант)";
+                    btn.style.opacity = "0.5";
+                    btn.style.cursor = "not-allowed";
+                } else {
+                    btn.onclick = () => submitVote(idx);
+                }
+
                 container.appendChild(btn);
             });
         }
@@ -304,8 +322,35 @@
     }
 
     function checkAllVotesSubmitted() {
-        // Чекаємо голоси від усіх гравців, окрім ведучого
         if (Object.keys(votesSubmitted).length === players.length - 1) {
+            const hostId = players[0].id; // Перший у списку — завжди ведучий
+
+            // Підрахунок балів за раунд
+            const roundDeltas = {};
+            players.forEach(p => roundDeltas[p.id] = 0);
+
+            Object.entries(votesSubmitted).forEach(([voterId, optIdx]) => {
+                const chosenOpt = currentOptions[optIdx];
+
+                if (chosenOpt.isCorrect) {
+                    // +2 бали за правильну відповідь
+                    roundDeltas[voterId] = (roundDeltas[voterId] || 0) + 2;
+                } else {
+                    // +1 бал автору фейкової відповіді за кожного голосуючого
+                    roundDeltas[chosenOpt.authorId] = (roundDeltas[chosenOpt.authorId] || 0) + 1;
+
+                    // -1 бал якщо проголосував за фейк ведучого
+                    if (chosenOpt.authorId === hostId) {
+                        roundDeltas[voterId] = (roundDeltas[voterId] || 0) - 1;
+                    }
+                }
+            });
+
+            // Оновлюємо загальний рахунок
+            players.forEach(p => {
+                p.score = (p.score || 0) + (roundDeltas[p.id] || 0);
+            });
+
             const results = currentOptions.map((opt, idx) => {
                 const voters = Object.entries(votesSubmitted)
                     .filter(([pId, vIdx]) => vIdx === idx)
@@ -314,14 +359,16 @@
                 return { ...opt, voters };
             });
 
-            broadcastState({ type: 'SHOW_RESULTS', results });
-            showResultsScreen(results);
+            broadcastState({ type: 'SHOW_RESULTS', results, players });
+            showResultsScreen(results, players);
         }
     }
 
-    // ЕТАП 3: Результати
-    function showResultsScreen(results) {
+    function showResultsScreen(results, updatedPlayers) {
+        if (updatedPlayers) players = updatedPlayers;
         showScreen('screen-results');
+
+        // Вивід результатів відповідей
         const container = document.getElementById('results-container');
         container.innerHTML = "";
 
@@ -340,6 +387,27 @@
             div.innerHTML = `<b>${res.text}</b> <br> ${badge} ${votersText}`;
             container.appendChild(div);
         });
+
+        // Вивід турнірної таблиці
+        const lbContainer = document.getElementById('leaderboard-container');
+        const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+
+        let tableHtml = `<table class="leaderboard">
+            <thead>
+                <tr><th>#</th><th>Гравець</th><th>Бали</th></tr>
+            </thead>
+            <tbody>`;
+
+        sortedPlayers.forEach((p, idx) => {
+            tableHtml += `<tr>
+                <td>${idx + 1}</td>
+                <td>${p.name}</td>
+                <td><b style="color:#f0b90b;">${p.score}</b></td>
+            </tr>`;
+        });
+
+        tableHtml += `</tbody></table>`;
+        lbContainer.innerHTML = tableHtml;
 
         if (isHost) {
             document.getElementById('next-round-btn').style.display = 'block';
