@@ -129,7 +129,7 @@
         peer = new Peer(myId);
         peer.on('open', () => {
             document.getElementById('room-id-display').innerText = code;
-            players.push({ id: myId, name: myName + " (Ведучий)", score: 0 });
+            players.push({ id: myId, name: myName, score: 0 });
             updateLobbyUI();
             showScreen('screen-lobby');
             document.getElementById('start-btn').style.display = 'block';
@@ -186,7 +186,7 @@
     function updateLobbyUI() {
         document.getElementById('player-count').innerText = players.length;
         const list = document.getElementById('player-list');
-        list.innerHTML = players.map(p => `<li>${p.name}</li>`).join('');
+        list.innerHTML = players.map((p, idx) => `<li>${p.name}${idx === 0 ? ' (Ведучий)' : ''}</li>`).join('');
         if (isHost) {
             document.getElementById('start-btn').disabled = players.length < 3; 
         }
@@ -224,7 +224,6 @@
         document.getElementById('submit-answers-btn').style.display = 'block';
         document.getElementById('input-wait-msg').style.display = 'none';
 
-        // Очищення полів вводу
         document.getElementById('host-fake').value = "";
         document.getElementById('host-real').value = "";
         document.getElementById('player-fake').value = "";
@@ -297,7 +296,6 @@
                 btn.className = 'option-btn';
                 btn.innerText = opt.text;
 
-                // Заборона голосування за свій варіант
                 if (opt.authorId === myId) {
                     btn.disabled = true;
                     btn.innerText += " 🚫 (Ваш варіант)";
@@ -323,9 +321,8 @@
 
     function checkAllVotesSubmitted() {
         if (Object.keys(votesSubmitted).length === players.length - 1) {
-            const hostId = players[0].id; // Перший у списку — завжди ведучий
+            const hostId = players[0].id;
 
-            // Підрахунок балів за раунд
             const roundDeltas = {};
             players.forEach(p => roundDeltas[p.id] = 0);
 
@@ -333,20 +330,16 @@
                 const chosenOpt = currentOptions[optIdx];
 
                 if (chosenOpt.isCorrect) {
-                    // +2 бали за правильну відповідь
                     roundDeltas[voterId] = (roundDeltas[voterId] || 0) + 2;
                 } else {
-                    // +1 бал автору фейкової відповіді за кожного голосуючого
                     roundDeltas[chosenOpt.authorId] = (roundDeltas[chosenOpt.authorId] || 0) + 1;
 
-                    // -1 бал якщо проголосував за фейк ведучого
                     if (chosenOpt.authorId === hostId) {
                         roundDeltas[voterId] = (roundDeltas[voterId] || 0) - 1;
                     }
                 }
             });
 
-            // Оновлюємо загальний рахунок
             players.forEach(p => {
                 p.score = (p.score || 0) + (roundDeltas[p.id] || 0);
             });
@@ -368,7 +361,6 @@
         if (updatedPlayers) players = updatedPlayers;
         showScreen('screen-results');
 
-        // Вивід результатів відповідей
         const container = document.getElementById('results-container');
         container.innerHTML = "";
 
@@ -388,7 +380,7 @@
             container.appendChild(div);
         });
 
-        // Вивід турнірної таблиці
+        // Вивід турнірної таблиці (без примітки ведучого)
         const lbContainer = document.getElementById('leaderboard-container');
         const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
 
@@ -399,9 +391,10 @@
             <tbody>`;
 
         sortedPlayers.forEach((p, idx) => {
+            const cleanName = p.name.replace(' (Ведучий)', '');
             tableHtml += `<tr>
                 <td>${idx + 1}</td>
-                <td>${p.name}</td>
+                <td>${cleanName}</td>
                 <td><b style="color:#f0b90b;">${p.score}</b></td>
             </tr>`;
         });
